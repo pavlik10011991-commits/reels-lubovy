@@ -1,0 +1,57 @@
+name: Автопостинг рилсов
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "publish или check"
+        default: "check"
+permissions:
+  contents: write
+concurrency: autopost
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Склеить видео из кусков (один раз)
+        run: |
+          shopt -s nullglob
+          changed=0
+          for p in media/*.mp4.part-aa; do
+            f="${p%.part-aa}"
+            if [ ! -f "$f" ]; then cat "$f".part-* > "$f"; changed=1; fi
+            git rm -q "$f".part-*
+          done
+          if [ -f checksums.txt ]; then sha256sum -c checksums.txt; fi
+          if [ $changed = 1 ]; then
+            git config user.name "autopost-bot"
+            git config user.email "autopost-bot@users.noreply.github.com"
+            git add media/*.mp4 && git commit -m "Видео склеены из кусков" && git push
+          fi
+      - run: pip install requests
+      - name: Проверка подключения
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.mode == 'check'
+        run: python3 post.py --check
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHANNEL: ${{ secrets.TG_CHANNEL }}
+      - name: Публикация
+        if: github.event_name == 'schedule' || github.event.inputs.mode == 'publish'
+        run: python3 post.py
+        env:
+          IG_ACCESS_TOKEN: ${{ secrets.IG_ACCESS_TOKEN }}
+          IG_USER_ID: ${{ secrets.IG_USER_ID }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHANNEL: ${{ secrets.TG_CHANNEL }}
+      - name: Сохранить отметку о публикации
+        if: always()
+        run: |
+          if [ -n "$(git status --porcelain posted.json)" ]; then
+            git config user.name "autopost-bot"
+            git config user.email "autopost-bot@users.noreply.github.com"
+            git add posted.json && git commit -m "Опубликован рилс" && git pull --rebase && git push
+          fi
